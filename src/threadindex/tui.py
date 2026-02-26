@@ -439,7 +439,7 @@ class ThreadIndexApp(App):
         self.filter_created_to: int | None = None
         self.filter_message_min: int | None = None
         self.filter_message_max: int | None = None
-        self.sort_by = "updated"
+        self.sort_by = "created"
         self.sort_order = "desc"
         self.db_history: list[Path] = self._load_db_history()
 
@@ -457,7 +457,7 @@ class ThreadIndexApp(App):
         self.preview = self.query_one("#preview", TextLog)
         self.command_input = self.query_one("#command_input", Input)
 
-        self.table.add_columns("Date", "Title", "Tags", "#")
+        self.table.add_columns("Created", "Title", "Tags", "#")
         self.table.zebra_stripes = True
         self.table.cursor_type = "row"
 
@@ -484,7 +484,7 @@ class ThreadIndexApp(App):
             sort_order=self.sort_order,
         )
         for conv in conversations:
-            date = self._format_ts(conv.get("updated_at") or conv.get("created_at"))
+            date = self._format_ts(conv.get("created_at"))
             title = conv.get("title") or "(untitled)"
             tags = conv.get("tags") or ""
             count = conv.get("message_count") or 0
