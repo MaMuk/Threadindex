@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "threadindex"
+version = "0.1.23"
+description = "Local, offline conversation inbox for exported assistant chats"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "ISC" }
+authors = [{ name = "Martin Melmuk" }]
+dependencies = [
+  "platformdirs>=4.2.0",
+  "rich>=13.7.0",
+  "textual>=0.63.0",
+  "typer>=0.12.0",
+]
+
+[project.scripts]
+tindex = "threadindex.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

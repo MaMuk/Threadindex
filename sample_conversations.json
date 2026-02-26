@@ -1,0 +1,81 @@
+[
+  {
+    "id": "conv-sample-1",
+    "title": "Sample Conversation One",
+    "create_time": 1700000000,
+    "update_time": 1700000300,
+    "mapping": {
+      "m1": {
+        "id": "m1",
+        "message": {
+          "id": "m1",
+          "author": {"role": "user"},
+          "content": {"parts": ["Hello! Can you summarize what threadindex does?"]},
+          "create_time": 1700000001
+        }
+      },
+      "m2": {
+        "id": "m2",
+        "message": {
+          "id": "m2",
+          "author": {"role": "assistant"},
+          "content": {"parts": ["threadindex is a local TUI for browsing and searching exported chat conversations."]},
+          "create_time": 1700000010
+        }
+      },
+      "m3": {
+        "id": "m3",
+        "message": {
+          "id": "m3",
+          "author": {"role": "user"},
+          "content": {"parts": ["Nice. Does it keep data local?"]},
+          "create_time": 1700000200
+        }
+      },
+      "m4": {
+        "id": "m4",
+        "message": {
+          "id": "m4",
+          "author": {"role": "assistant"},
+          "content": {"parts": ["Yes, everything stays on your machine."]},
+          "create_time": 1700000300
+        }
+      }
+    }
+  },
+  {
+    "id": "conv-sample-2",
+    "title": "Sample Conversation Two",
+    "create_time": 1700001000,
+    "update_time": 1700001200,
+    "mapping": {
+      "n1": {
+        "id": "n1",
+        "message": {
+          "id": "n1",
+          "author": {"role": "user"},
+          "content": {"parts": ["Give me a quick plan for organizing exported chats."]},
+          "create_time": 1700001001
+        }
+      },
+      "n2": {
+        "id": "n2",
+        "message": {
+          "id": "n2",
+          "author": {"role": "assistant"},
+          "content": {"parts": ["1) Import the export. 2) Tag important threads. 3) Use search for recall."]},
+          "create_time": 1700001100
+        }
+      },
+      "n3": {
+        "id": "n3",
+        "message": {
+          "id": "n3",
+          "author": {"role": "user"},
+          "content": {"parts": ["Thanks!"]},
+          "create_time": 1700001200
+        }
+      }
+    }
+  }
+]
