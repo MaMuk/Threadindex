@@ -11,6 +11,10 @@ from platformdirs import user_cache_path, user_config_path, user_data_path, user
 APP_NAME = "threadindex"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M"
 DEFAULT_CHAT_URL_BASE = "https://chatgpt.com/c/"
+DEFAULT_CHAT_URL_BASES = {
+    "chatgpt": "https://chatgpt.com/c/",
+    "deepseek": "https://chat.deepseek.com/a/chat/s/",
+}
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,7 @@ class Config:
     paths: Paths
     date_format: str
     chat_url_base: str
+    chat_url_bases: dict[str, str]
 
 
 def get_paths() -> Paths:
@@ -93,6 +98,10 @@ def _write_default_config(paths: Paths) -> None:
         "\n"
         "[links]\n"
         f"chat_url_base = \"{DEFAULT_CHAT_URL_BASE}\"\n"
+        "\n"
+        "[links.chat_url_base_by_source]\n"
+        f"chatgpt = \"{DEFAULT_CHAT_URL_BASES['chatgpt']}\"\n"
+        f"deepseek = \"{DEFAULT_CHAT_URL_BASES['deepseek']}\"\n"
     )
     paths.config_file.write_text(content, encoding="utf-8")
 
@@ -106,6 +115,7 @@ def load_config() -> Config:
 
     date_format = DEFAULT_DATE_FORMAT
     chat_url_base = DEFAULT_CHAT_URL_BASE
+    chat_url_bases = dict(DEFAULT_CHAT_URL_BASES)
     db_path = paths.db_path
 
     try:
@@ -120,6 +130,11 @@ def load_config() -> Config:
             db_path = candidate
         links = raw.get("links", {})
         chat_url_base = links.get("chat_url_base", DEFAULT_CHAT_URL_BASE)
+        raw_map = links.get("chat_url_base_by_source", {})
+        if isinstance(raw_map, dict):
+            for key, value in raw_map.items():
+                if isinstance(key, str) and isinstance(value, str) and value.strip():
+                    chat_url_bases[key.lower()] = value
     except (OSError, tomllib.TOMLDecodeError):
         pass
 
@@ -134,11 +149,21 @@ def load_config() -> Config:
         db_history_file=paths.db_history_file,
     )
 
-    return Config(paths=updated_paths, date_format=date_format, chat_url_base=chat_url_base)
+    return Config(
+        paths=updated_paths,
+        date_format=date_format,
+        chat_url_base=chat_url_base,
+        chat_url_bases=chat_url_bases,
+    )
 
 
 def save_config(config: Config) -> None:
     ensure_dirs(config.paths)
+    source_bases = dict(DEFAULT_CHAT_URL_BASES)
+    source_bases.update({key.lower(): value for key, value in config.chat_url_bases.items()})
+    mapping_lines = "".join(
+        f"{key} = \"{value}\"\n" for key, value in sorted(source_bases.items(), key=lambda i: i[0])
+    )
     content = (
         "[paths]\n"
         f"db_path = \"{config.paths.db_path.as_posix()}\"\n"
@@ -148,6 +173,9 @@ def save_config(config: Config) -> None:
         "\n"
         "[links]\n"
         f"chat_url_base = \"{config.chat_url_base}\"\n"
+        "\n"
+        "[links.chat_url_base_by_source]\n"
+        f"{mapping_lines}"
     )
     config.paths.config_file.write_text(content, encoding="utf-8")
 

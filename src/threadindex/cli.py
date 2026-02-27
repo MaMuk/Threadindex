@@ -6,7 +6,7 @@ import typer
 
 from .config import load_config, load_db_history, save_config, save_db_history
 from .db import Database
-from .importer import Importer
+from .importer import SOURCE_CHOICES, Importer
 from .tui import run_tui
 
 app = typer.Typer(add_completion=False)
@@ -28,11 +28,26 @@ def main(ctx: typer.Context) -> None:
 
 
 @app.command("import")
-def import_data(path: Path, dry_run: bool = typer.Option(False, help="Preview changes")) -> None:
-    """Import an export zip/dir/file into the local database."""
+def import_data(
+    path: Path,
+    dry_run: bool = typer.Option(False, help="Preview changes"),
+    source: str = typer.Option(
+        "auto",
+        "--source",
+        help="Import source: auto, chatgpt, or deepseek",
+    ),
+) -> None:
+    """Import an export zip/dir/file (ChatGPT, Deepseek) into the local database."""
+    selected_source = source.lower().strip()
+    if selected_source not in SOURCE_CHOICES:
+        raise typer.BadParameter("source must be one of: auto, chatgpt, deepseek")
     db = _open_db()
     importer = Importer(db)
-    result = importer.import_path(path, dry_run=dry_run)
+    try:
+        result = importer.import_path(path, dry_run=dry_run, source=selected_source)
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"Import failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     if dry_run:
         typer.echo("Dry run complete. No changes were written.")
     typer.echo(
@@ -94,6 +109,7 @@ def doctor_db_set(database: str) -> None:
         paths=updated_paths,
         date_format=config.date_format,
         chat_url_base=config.chat_url_base,
+        chat_url_bases=config.chat_url_bases,
     )
     save_config(updated)
     history = load_db_history(config.paths)

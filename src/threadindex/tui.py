@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - fallback for newer Textual
 
 from .config import load_config, load_db_history, save_config, save_db_history
 from .db import Database
-from .importer import Importer
+from .importer import SOURCE_CHOICES, Importer
 from .utils import fingerprint_conversation
 
 
@@ -46,6 +46,8 @@ class HelpScreen(ModalScreen[None]):
             "- filter updated 2024-01-01 2024-12-31\n"
             "- filter created 2024-01-01 2024-12-31\n"
             "- filter title \"planning\"\n"
+            "- filter source deepseek\n"
+            "- import /path/to/export.zip --source chatgpt\n"
             "- filter clear\n"
             "- details\n"
         )
@@ -75,7 +77,8 @@ FILTER_FIELDS = [
     ("updated", "Updated", "Date range: YYYY-MM-DD YYYY-MM-DD"),
     ("created", "Created", "Date range: YYYY-MM-DD YYYY-MM-DD"),
     ("messages", "Messages", "Range: 5 20"),
-    ("source", "Source", "Text contains"),
+    ("source", "Source", "Source id (chatgpt, deepseek)"),
+    ("file_source", "File Source", "Import path contains"),
     ("id", "ID", "Text contains"),
 ]
 
@@ -153,6 +156,10 @@ class FilterScreen(ModalScreen[None]):
 
     def _update_hint(self) -> None:
         hint = next((item[2] for item in FILTER_FIELDS if item[0] == self.current_field), "")
+        if self.current_field == "source":
+            available = self.app._source_filter_values()
+            if available:
+                hint = f"{hint}. Available: {', '.join(available)}"
         status = f" | {self.status}" if self.status else ""
         self.hint.update(f"{self.current_field}: {hint}{status}")
 
@@ -233,7 +240,7 @@ class SettingsScreen(ModalScreen[None]):
 
     def action_import_data(self) -> None:
         self.input_mode = "import"
-        self.input.placeholder = "Import path (zip/dir/json)"
+        self.input.placeholder = "Import path [--source auto|chatgpt|deepseek]"
         self.input.value = ""
         self.input.display = True
         self.input.focus()
@@ -299,9 +306,16 @@ class SettingsScreen(ModalScreen[None]):
                 self._update_hint("No path entered.")
         elif self.input_mode == "import":
             if value:
-                self.app._perform_import(value)
-                self._refresh_table()
-                self._update_hint("Import complete.")
+                try:
+                    path_text, source = self.app._parse_import_spec(value)
+                except ValueError as exc:
+                    self._update_hint(str(exc))
+                    return
+                if self.app._perform_import(path_text, source=source):
+                    self._refresh_table()
+                    self._update_hint("Import complete.")
+                else:
+                    self._update_hint("Import failed.")
             else:
                 self._update_hint("No import path entered.")
         else:
@@ -432,6 +446,7 @@ class ThreadIndexApp(App):
         self.filter_tags: list[str] = []
         self.filter_title: str | None = None
         self.filter_source: str | None = None
+        self.filter_file_source: str | None = None
         self.filter_id: str | None = None
         self.filter_updated_from: int | None = None
         self.filter_updated_to: int | None = None
@@ -477,6 +492,7 @@ class ThreadIndexApp(App):
             created_to=self.filter_created_to,
             title=self.filter_title,
             source=self.filter_source,
+            file_source=self.filter_file_source,
             conv_id=self.filter_id,
             message_min=self.filter_message_min,
             message_max=self.filter_message_max,
@@ -524,8 +540,12 @@ class ThreadIndexApp(App):
             return ""
         return datetime.fromtimestamp(ts).strftime(self.config.date_format)
 
-    def _chat_url(self, conversation_id: str) -> str:
-        base = self.config.chat_url_base or "https://chatgpt.com/c/"
+    def _chat_url(self, conversation_id: str, source: str | None = None) -> str:
+        source_key = (source or "").strip().lower()
+        source_map = self.config.chat_url_bases or {}
+        base = source_map.get(source_key)
+        if not base:
+            base = self.config.chat_url_base or source_map.get("chatgpt") or "https://chatgpt.com/c/"
         if not base.endswith("/"):
             base = f"{base}/"
         return f"{base}{conversation_id}"
@@ -571,10 +591,11 @@ class ThreadIndexApp(App):
         details = (
             f"Title: {conversation.get('title') or '(untitled)'}\n"
             f"ID: {conversation_id}\n"
-            f"URL: {self._chat_url(conversation_id)}\n"
+            f"URL: {self._chat_url(conversation_id, conversation.get('source'))}\n"
             f"Created: {self._format_ts(conversation.get('created_at'))}\n"
             f"Updated: {self._format_ts(conversation.get('updated_at'))}\n"
             f"Source: {conversation.get('source') or ''}\n"
+            f"File source: {conversation.get('file_source') or ''}\n"
             f"Tags: {conversation.get('tags') or ''}\n"
             f"Messages: {conversation.get('message_count') or 0}"
         )
@@ -629,7 +650,12 @@ class ThreadIndexApp(App):
             return
         if self.input_mode == "import":
             if value:
-                self._perform_import(value)
+                try:
+                    path_text, source = self._parse_import_spec(value)
+                except ValueError as exc:
+                    self._notify(str(exc))
+                else:
+                    self._perform_import(path_text, source=source)
             self.close_input()
             return
         if self.input_mode == "tag":
@@ -671,22 +697,61 @@ class ThreadIndexApp(App):
             self._clear_filters()
         elif command == "details":
             self.action_details()
+        elif command == "import":
+            arg_text = value[len("import") :].strip()
+            try:
+                path_text, source = self._parse_import_spec(arg_text)
+            except ValueError as exc:
+                self._notify(str(exc))
+                return
+            self._perform_import(path_text, source=source)
         else:
             self._notify("Unknown command.")
 
-    def _perform_import(self, path_text: str) -> None:
+    def _perform_import(self, path_text: str, source: str = "auto") -> bool:
         path = Path(path_text).expanduser()
         try:
-            result = self.importer.import_path(path)
+            result = self.importer.import_path(path, source=source)
         except Exception as exc:  # noqa: BLE001
             self._notify(f"Import failed: {exc}")
-            return
+            return False
         self.load_conversations(self.search_query)
         self._notify(
             f"Imported: {result.inserted_conversations} new, "
             f"{result.updated_conversations} updated, "
-            f"{result.inserted_messages} messages."
+            f"{result.inserted_messages} messages. "
+            f"Source={source}."
         )
+        return True
+
+    def _parse_import_spec(self, raw: str) -> tuple[str, str]:
+        parts = shlex.split(raw)
+        if not parts:
+            raise ValueError("Import usage: <path> [--source auto|chatgpt|deepseek]")
+
+        source = "auto"
+        path_tokens: list[str] = []
+        idx = 0
+        while idx < len(parts):
+            token = parts[idx]
+            if token == "--source":
+                if idx + 1 >= len(parts):
+                    raise ValueError("Missing value for --source")
+                source = parts[idx + 1].lower().strip()
+                idx += 2
+                continue
+            if token.startswith("--source="):
+                source = token.split("=", 1)[1].lower().strip()
+                idx += 1
+                continue
+            path_tokens.append(token)
+            idx += 1
+
+        if not path_tokens:
+            raise ValueError("Missing import path")
+        if source not in SOURCE_CHOICES:
+            raise ValueError("source must be one of: auto, chatgpt, deepseek")
+        return " ".join(path_tokens), source
 
     def _apply_tags(self, value: str) -> None:
         conversation_id = self._current_conversation_id()
@@ -772,6 +837,7 @@ class ThreadIndexApp(App):
             paths=updated_paths,
             date_format=self.config.date_format,
             chat_url_base=self.config.chat_url_base,
+            chat_url_bases=self.config.chat_url_bases,
         )
         save_config(self.config)
         self.db = Database(self.config.paths.db_path)
@@ -818,17 +884,33 @@ class ThreadIndexApp(App):
         if len(parts) < 2:
             self._notify(
                 "Usage: filter <field> <value> | filter clear. Fields: title, tags, updated, "
-                "created, messages, source, id"
+                "created, messages, source, file_source, id"
             )
             return
         field = parts[1].lower()
         if field in {"clear", "reset"}:
             self._clear_filters()
             return
-        aliases = {"tag": "tags", "date": "updated"}
+        aliases = {
+            "tag": "tags",
+            "date": "updated",
+            "file-source": "file_source",
+            "path": "file_source",
+        }
         field = aliases.get(field, field)
-        if field not in {"title", "tags", "updated", "created", "messages", "source", "id"}:
-            self._notify("Filter fields: title, tags, updated, created, messages, source, id")
+        if field not in {
+            "title",
+            "tags",
+            "updated",
+            "created",
+            "messages",
+            "source",
+            "file_source",
+            "id",
+        }:
+            self._notify(
+                "Filter fields: title, tags, updated, created, messages, source, file_source, id"
+            )
             return
         remainder = value.split(None, 2)
         raw = remainder[2] if len(remainder) > 2 else ""
@@ -840,6 +922,7 @@ class ThreadIndexApp(App):
         self.filter_tags = []
         self.filter_title = None
         self.filter_source = None
+        self.filter_file_source = None
         self.filter_id = None
         self.filter_updated_from = None
         self.filter_updated_to = None
@@ -857,6 +940,8 @@ class ThreadIndexApp(App):
             self.filter_title = None
         elif field == "source":
             self.filter_source = None
+        elif field == "file_source":
+            self.filter_file_source = None
         elif field == "id":
             self.filter_id = None
         elif field == "updated":
@@ -876,12 +961,14 @@ class ThreadIndexApp(App):
             self.load_conversations(self.search_query)
             return True, f"Cleared filter: {field}"
 
-        if field in {"title", "source", "id"}:
+        if field in {"title", "source", "file_source", "id"}:
             cleaned = self._strip_quotes(value)
             if field == "title":
                 self.filter_title = cleaned
             elif field == "source":
-                self.filter_source = cleaned
+                self.filter_source = cleaned.lower()
+            elif field == "file_source":
+                self.filter_file_source = cleaned
             else:
                 self.filter_id = cleaned
         elif field == "tags":
@@ -910,6 +997,10 @@ class ThreadIndexApp(App):
             return False, "Unknown filter field."
 
         self.load_conversations(self.search_query)
+        if field == "source":
+            available = self._source_filter_values()
+            if available and (self.filter_source or "") not in available:
+                return True, f"Filter applied: {field}. Available: {', '.join(available)}"
         return True, f"Filter applied: {field}"
 
     def _strip_quotes(self, value: str) -> str:
@@ -985,6 +1076,8 @@ class ThreadIndexApp(App):
             return self.filter_title or ""
         if field == "source":
             return self.filter_source or ""
+        if field == "file_source":
+            return self.filter_file_source or ""
         if field == "id":
             return self.filter_id or ""
         if field == "updated":
@@ -995,6 +1088,12 @@ class ThreadIndexApp(App):
             return self._format_range(self.filter_message_min, self.filter_message_max)
         return ""
 
+    def _source_filter_values(self) -> list[str]:
+        values = self.db.list_sources()
+        if values:
+            return values
+        return sorted(item for item in SOURCE_CHOICES if item != "auto")
+
     def _update_title(self) -> None:
         parts = [f"sort={self.sort_by} {self.sort_order}"]
         if self.filter_tags:
@@ -1003,16 +1102,22 @@ class ThreadIndexApp(App):
             parts.append(f"title~{self.filter_title}")
         if self.filter_source:
             parts.append(f"source~{self.filter_source}")
+        if self.filter_file_source:
+            parts.append(f"file_source~{self.filter_file_source}")
         if self.filter_id:
             parts.append(f"id~{self.filter_id}")
         if self.filter_updated_from or self.filter_updated_to:
-            parts.append(
-                f"updated={self._format_date_range(self.filter_updated_from, self.filter_updated_to)}"
+            updated_range = self._format_date_range(
+                self.filter_updated_from,
+                self.filter_updated_to,
             )
+            parts.append(f"updated={updated_range}")
         if self.filter_created_from or self.filter_created_to:
-            parts.append(
-                f"created={self._format_date_range(self.filter_created_from, self.filter_created_to)}"
+            created_range = self._format_date_range(
+                self.filter_created_from,
+                self.filter_created_to,
             )
+            parts.append(f"created={created_range}")
         if self.filter_message_min is not None or self.filter_message_max is not None:
             parts.append(
                 f"messages={self._format_range(self.filter_message_min, self.filter_message_max)}"

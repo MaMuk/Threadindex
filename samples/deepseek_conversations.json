@@ -1,0 +1,142 @@
+[
+  {
+    "id": "ds-sample-1",
+    "title": "Deepseek Sample Conversation One",
+    "inserted_at": "2026-01-15T10:00:00+00:00",
+    "updated_at": "2026-01-15T10:05:00+00:00",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "parent": null,
+        "children": ["1"],
+        "message": null
+      },
+      "1": {
+        "id": "1",
+        "parent": "root",
+        "children": ["2"],
+        "message": {
+          "files": [],
+          "model": "deepseek-chat",
+          "inserted_at": "2026-01-15T10:00:01+00:00",
+          "fragments": [
+            {
+              "type": "REQUEST",
+              "content": "Hello! What is threadindex in one sentence?"
+            }
+          ]
+        }
+      },
+      "2": {
+        "id": "2",
+        "parent": "1",
+        "children": ["3"],
+        "message": {
+          "files": [],
+          "model": "deepseek-chat",
+          "inserted_at": "2026-01-15T10:00:05+00:00",
+          "fragments": [
+            {
+              "type": "RESPONSE",
+              "content": "threadindex is a local offline inbox for importing, searching, and organizing LLM conversations."
+            }
+          ]
+        }
+      },
+      "3": {
+        "id": "3",
+        "parent": "2",
+        "children": ["4"],
+        "message": {
+          "files": [],
+          "model": "deepseek-chat",
+          "inserted_at": "2026-01-15T10:03:10+00:00",
+          "fragments": [
+            {
+              "type": "REQUEST",
+              "content": "Does it keep data local?"
+            }
+          ]
+        }
+      },
+      "4": {
+        "id": "4",
+        "parent": "3",
+        "children": [],
+        "message": {
+          "files": [],
+          "model": "deepseek-chat",
+          "inserted_at": "2026-01-15T10:05:00+00:00",
+          "fragments": [
+            {
+              "type": "RESPONSE",
+              "content": "Yes, your chat data stays on your machine."
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "ds-sample-2",
+    "title": "Deepseek Sample Conversation Two",
+    "inserted_at": "2026-01-20T08:30:00+00:00",
+    "updated_at": "2026-01-20T08:40:00+00:00",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "parent": null,
+        "children": ["1"],
+        "message": null
+      },
+      "1": {
+        "id": "1",
+        "parent": "root",
+        "children": ["2"],
+        "message": {
+          "files": [],
+          "model": "deepseek-chat",
+          "inserted_at": "2026-01-20T08:30:01+00:00",
+          "fragments": [
+            {
+              "type": "REQUEST",
+              "content": "Give me a quick plan to organize exported chats."
+            }
+          ]
+        }
+      },
+      "2": {
+        "id": "2",
+        "parent": "1",
+        "children": ["3"],
+        "message": {
+          "files": [],
+          "model": "deepseek-chat",
+          "inserted_at": "2026-01-20T08:31:00+00:00",
+          "fragments": [
+            {
+              "type": "RESPONSE",
+              "content": "1) Import export files. 2) Tag important threads. 3) Use search and filters for quick recall."
+            }
+          ]
+        }
+      },
+      "3": {
+        "id": "3",
+        "parent": "2",
+        "children": [],
+        "message": {
+          "files": [],
+          "model": "deepseek-chat",
+          "inserted_at": "2026-01-20T08:40:00+00:00",
+          "fragments": [
+            {
+              "type": "REQUEST",
+              "content": "Thanks!"
+            }
+          ]
+        }
+      }
+    }
+  }
+]

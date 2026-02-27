@@ -21,6 +21,7 @@ class ConversationData:
     created_at: int
     updated_at: int
     source: str
+    file_source: str
     content_hash: str
     message_count: int
     messages: list[MessageData]

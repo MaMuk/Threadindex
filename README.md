@@ -1,6 +1,6 @@
 # threadindex
 
-Local, offline conversation inbox for exported ChatGPT chats. threadindex turns your ChatGPT export into a fast, searchable TUI that feels like an email inbox. You'll need the export of your ChatGPT data and can either import the whole zip or single conversation JSON files.
+Local, offline conversation inbox for exported LLM chats. threadindex turns your exports into a fast, searchable TUI that feels like an email inbox. It currently supports ChatGPT and Deepseek exports.
 
 ## Screenshots
 
@@ -51,10 +51,16 @@ echo $PATH
 
 ## Usage
 
-Import a ChatGPT export (zip, directory, or single conversation JSON):
+Import a ChatGPT or Deepseek export (zip, directory, or single conversation JSON):
 
 ```bash
 tindex import /path/to/export.zip
+```
+
+Force parser source type when needed:
+
+```bash
+tindex import /path/to/export.zip --source deepseek
 ```
 
 Then launch the TUI:
@@ -83,6 +89,7 @@ Example commands in the command bar:
 - `filter updated 2024-01-01 2024-12-31`
 - `filter created 2024-01-01 2024-12-31`
 - `filter title "planning"`
+- `filter source deepseek`
 - `filter clear`
 
 ## Data locations (XDG)
@@ -103,6 +110,10 @@ Config snippet (for chat links in the preview pane):
 ```toml
 [links]
 chat_url_base = "https://chatgpt.com/c/"
+
+[links.chat_url_base_by_source]
+chatgpt = "https://chatgpt.com/c/"
+deepseek = "https://chat.deepseek.com/a/chat/s/"
 ```
 
 ## Updating imports

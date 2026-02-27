@@ -30,6 +30,7 @@ class Database:
                 created_at INTEGER,
                 updated_at INTEGER,
                 source TEXT,
+                file_source TEXT,
                 content_hash TEXT,
                 message_count INTEGER
             );
@@ -83,14 +84,15 @@ class Database:
             ON conversations(updated_at);
             """
         )
+        self._migrate_conversations_schema()
         self.conn.commit()
 
     def insert_conversation(self, conversation: ConversationData) -> None:
         self.conn.execute(
             """
             INSERT INTO conversations
-            (id, title, created_at, updated_at, source, content_hash, message_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, title, created_at, updated_at, source, file_source, content_hash, message_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation.id,
@@ -98,6 +100,7 @@ class Database:
                 conversation.created_at,
                 conversation.updated_at,
                 conversation.source,
+                conversation.file_source,
                 conversation.content_hash,
                 conversation.message_count,
             ),
@@ -107,7 +110,7 @@ class Database:
         self.conn.execute(
             """
             UPDATE conversations
-            SET title = ?, created_at = ?, updated_at = ?, source = ?,
+            SET title = ?, created_at = ?, updated_at = ?, source = ?, file_source = ?,
                 content_hash = ?, message_count = ?
             WHERE id = ?
             """,
@@ -116,6 +119,7 @@ class Database:
                 conversation.created_at,
                 conversation.updated_at,
                 conversation.source,
+                conversation.file_source,
                 conversation.content_hash,
                 conversation.message_count,
                 conversation.id,
@@ -175,6 +179,7 @@ class Database:
         created_to: int | None = None,
         title: str | None = None,
         source: str | None = None,
+        file_source: str | None = None,
         conv_id: str | None = None,
         message_min: int | None = None,
         message_max: int | None = None,
@@ -232,8 +237,11 @@ class Database:
             where_clauses.append("LOWER(c.title) LIKE ?")
             params.append(f"%{title.lower()}%")
         if source:
-            where_clauses.append("LOWER(c.source) LIKE ?")
-            params.append(f"%{source.lower()}%")
+            where_clauses.append("LOWER(c.source) = ?")
+            params.append(source.lower())
+        if file_source:
+            where_clauses.append("LOWER(c.file_source) LIKE ?")
+            params.append(f"%{file_source.lower()}%")
         if conv_id:
             where_clauses.append("LOWER(c.id) LIKE ?")
             params.append(f"%{conv_id.lower()}%")
@@ -388,6 +396,37 @@ class Database:
             "messages": message_count,
             "fts_rows": fts_count,
         }
+
+    def list_sources(self) -> list[str]:
+        cur = self.conn.execute(
+            """
+            SELECT DISTINCT source
+            FROM conversations
+            WHERE source IS NOT NULL AND source != ''
+            ORDER BY source ASC
+            """
+        )
+        return [row["source"] for row in cur.fetchall()]
+
+    def _migrate_conversations_schema(self) -> None:
+        columns = self.conn.execute("PRAGMA table_info(conversations)").fetchall()
+        names = [row["name"] for row in columns]
+
+        if "source" in names and "file_source" not in names:
+            self.conn.execute("ALTER TABLE conversations RENAME COLUMN source TO file_source")
+            self.conn.execute("ALTER TABLE conversations ADD COLUMN source TEXT")
+            self.conn.execute(
+                "UPDATE conversations SET source = 'chatgpt' WHERE source IS NULL OR source = ''"
+            )
+            return
+
+        if "file_source" not in names:
+            self.conn.execute("ALTER TABLE conversations ADD COLUMN file_source TEXT")
+        if "source" not in names:
+            self.conn.execute("ALTER TABLE conversations ADD COLUMN source TEXT")
+        self.conn.execute(
+            "UPDATE conversations SET source = 'chatgpt' WHERE source IS NULL OR source = ''"
+        )
 
     @staticmethod
     def _fts_query(search: str) -> str:

@@ -9,17 +9,18 @@ from pathlib import Path
 from typing import Any
 
 from .db import Database
-from .logging import get_logger
-from .models import ConversationData, ImportResult, MessageData
-from .utils import (
-    canonical_json,
-    fingerprint_conversation,
-    fingerprint_message,
-    safe_int,
-    sha256_bytes,
+from .importers import (
+    ChatGPTConversationImporter,
+    ConversationSourceImporter,
+    DeepseekConversationImporter,
+    RawConversationRecord,
 )
+from .logging import get_logger
+from .models import ConversationData, ImportResult
+from .utils import canonical_json, sha256_bytes
 
 _LOG = get_logger()
+SOURCE_CHOICES = {"auto", "chatgpt", "deepseek"}
 
 
 @dataclass(frozen=True)
@@ -34,12 +35,19 @@ class ImportStats:
 class Importer:
     def __init__(self, db: Database):
         self.db = db
+        self.source_importers: list[ConversationSourceImporter] = [
+            ChatGPTConversationImporter(),
+            DeepseekConversationImporter(),
+        ]
 
-    def import_path(self, path: Path, dry_run: bool = False) -> ImportResult:
+    def import_path(self, path: Path, dry_run: bool = False, source: str = "auto") -> ImportResult:
         path = path.expanduser()
+        selected_source = source.lower().strip()
+        if selected_source not in SOURCE_CHOICES:
+            raise ValueError(f"Unsupported source: {source}. Use one of: auto, chatgpt, deepseek")
         source_hash = self._compute_source_hash(path)
-        raw_conversations = self._load_conversations(path)
-        conversations = [self._normalize_conversation(raw, str(path)) for raw in raw_conversations]
+        raw_records = self._load_conversations(path, source=selected_source)
+        conversations = self._normalize_records(raw_records, str(path))
 
         stats = ImportStats()
 
@@ -115,6 +123,7 @@ class Importer:
             created_at=created_at,
             updated_at=updated_at,
             source=conversation.source,
+            file_source=conversation.file_source,
             content_hash=conversation.content_hash,
             message_count=conversation.message_count,
             messages=conversation.messages,
@@ -172,17 +181,17 @@ class Importer:
             return sha256_bytes(canonical_json(payload).encode("utf-8"))
         raise FileNotFoundError(f"Path not found: {path}")
 
-    def _load_conversations(self, path: Path) -> list[dict[str, Any]]:
+    def _load_conversations(self, path: Path, source: str = "auto") -> list[RawConversationRecord]:
         if path.is_file() and path.suffix.lower() == ".zip":
-            return self._load_from_zip(path)
+            return self._load_from_zip(path, source=source)
         if path.is_dir():
-            return self._load_from_directory(path)
+            return self._load_from_directory(path, source=source)
         if path.is_file() and path.suffix.lower() == ".json":
-            return self._load_from_json_file(path)
+            return self._load_from_json_file(path, source=source)
         raise ValueError(f"Unsupported import path: {path}")
 
-    def _load_from_zip(self, path: Path) -> list[dict[str, Any]]:
-        conversations: list[dict[str, Any]] = []
+    def _load_from_zip(self, path: Path, source: str = "auto") -> list[RawConversationRecord]:
+        records: list[RawConversationRecord] = []
         with zipfile.ZipFile(path) as zf:
             names = [name for name in zf.namelist() if name.lower().endswith(".json")]
             conv_names = [name for name in names if self._is_conversation_file(name)]
@@ -193,28 +202,28 @@ class Importer:
                 except UnicodeDecodeError as exc:
                     _LOG.warning("Skipping %s (%s)", name, exc)
                     continue
-                conversations.extend(self._load_from_json_text(text))
-        if not conversations:
+                records.extend(self._load_from_json_text(text, source=source))
+        if not records:
             raise ValueError("No conversations found in zip export")
-        return conversations
+        return records
 
-    def _load_from_directory(self, path: Path) -> list[dict[str, Any]]:
+    def _load_from_directory(self, path: Path, source: str = "auto") -> list[RawConversationRecord]:
         conv_files = self._find_conversation_files(path)
         if conv_files:
-            conversations: list[dict[str, Any]] = []
+            records: list[RawConversationRecord] = []
             for file in conv_files:
-                conversations.extend(self._load_from_json_file(file))
-            return conversations
+                records.extend(self._load_from_json_file(file, source=source))
+            return records
 
-        conversations: list[dict[str, Any]] = []
+        records: list[RawConversationRecord] = []
         for file in path.rglob("*.json"):
             try:
-                conversations.extend(self._load_from_json_file(file))
+                records.extend(self._load_from_json_file(file, source=source))
             except (ValueError, json.JSONDecodeError):
                 continue
-        if not conversations:
+        if not records:
             raise ValueError("No conversations found in directory")
-        return conversations
+        return records
 
     def _find_conversation_files(self, path: Path) -> list[Path]:
         files = [file for file in path.rglob("*.json") if self._is_conversation_file(file.name)]
@@ -228,16 +237,16 @@ class Importer:
             return True
         return re.fullmatch(r"conversations-\d+\.json", base) is not None
 
-    def _load_from_json_file(self, path: Path) -> list[dict[str, Any]]:
+    def _load_from_json_file(self, path: Path, source: str = "auto") -> list[RawConversationRecord]:
         text = path.read_text(encoding="utf-8-sig")
-        return self._load_from_json_text(text)
+        return self._load_from_json_text(text, source=source)
 
-    def _load_from_json_text(self, text: str) -> list[dict[str, Any]]:
+    def _load_from_json_text(self, text: str, source: str = "auto") -> list[RawConversationRecord]:
         try:
             data = json.loads(text)
-            return self._normalize_json_payload(data)
+            return self._extract_records_from_payload(data, source=source)
         except json.JSONDecodeError:
-            conversations: list[dict[str, Any]] = []
+            records: list[RawConversationRecord] = []
             for line in text.splitlines():
                 line = line.strip()
                 if not line:
@@ -246,119 +255,56 @@ class Importer:
                     item = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                conversations.extend(self._normalize_json_payload(item))
-            return conversations
+                records.extend(self._extract_records_from_payload(item, source=source))
+            return records
 
-    def _normalize_json_payload(self, data: Any) -> list[dict[str, Any]]:
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-        if isinstance(data, dict):
-            if "conversations" in data and isinstance(data["conversations"], list):
-                return [item for item in data["conversations"] if isinstance(item, dict)]
-            if "conversations" in data and isinstance(data["conversations"], dict):
-                nested = data["conversations"]
-                if isinstance(nested.get("items"), list):
-                    return [item for item in nested["items"] if isinstance(item, dict)]
-                if isinstance(nested.get("data"), list):
-                    return [item for item in nested["data"] if isinstance(item, dict)]
-            if "items" in data and isinstance(data["items"], list):
-                return [item for item in data["items"] if isinstance(item, dict)]
-            if "data" in data and isinstance(data["data"], list):
-                return [item for item in data["data"] if isinstance(item, dict)]
-            if "mapping" in data:
-                return [data]
-        return []
+    def _extract_records_from_payload(
+        self,
+        payload: Any,
+        source: str = "auto",
+    ) -> list[RawConversationRecord]:
+        records: list[RawConversationRecord] = []
+        candidates = self.source_importers
+        if source != "auto":
+            candidates = [item for item in self.source_importers if item.source_type == source]
 
-    def _normalize_conversation(self, raw: dict[str, Any], source: str) -> ConversationData:
-        title = (raw.get("title") or "(untitled)").strip()
-        created_at = safe_int(raw.get("create_time"))
-        updated_at = safe_int(raw.get("update_time"))
-
-        mapping = raw.get("mapping") or {}
-        messages: list[dict[str, Any]] = []
-        for node in mapping.values():
-            message = node.get("message") if isinstance(node, dict) else None
-            if not message:
+        for source_importer in candidates:
+            conversations = source_importer.extract_conversations(payload)
+            if not conversations:
                 continue
-            author_role = (
-                (message.get("author") or {}).get("role")
-                if isinstance(message.get("author"), dict)
-                else "unknown"
+            records.extend(
+                RawConversationRecord(source_type=source_importer.source_type, payload=item)
+                for item in conversations
             )
-            content_text = self._extract_content(message)
-            if content_text is None:
+            return records
+        return records
+
+    def _normalize_records(
+        self,
+        records: list[RawConversationRecord],
+        source_path: str,
+    ) -> list[ConversationData]:
+        if not records:
+            return []
+
+        importer_map = {source.source_type: source for source in self.source_importers}
+        conversations: list[ConversationData] = []
+
+        for record in records:
+            source_importer = importer_map.get(record.source_type)
+            if source_importer is None:
+                _LOG.warning("Skipping unsupported source type: %s", record.source_type)
                 continue
-            msg_id = message.get("id") or node.get("id")
-            msg_created = safe_int(message.get("create_time"))
-            messages.append(
-                {
-                    "id": msg_id,
-                    "author_role": author_role or "unknown",
-                    "content": content_text,
-                    "created_at": msg_created,
-                }
-            )
-
-        messages.sort(key=lambda m: (m["created_at"], m["id"] or ""))
-
-        message_payloads = [
-            {
-                "author_role": msg["author_role"],
-                "content": msg["content"],
-                "created_at": msg["created_at"],
-            }
-            for msg in messages
-        ]
-
-        content_hash = fingerprint_conversation(title, created_at, updated_at, message_payloads)
-        conversation_id = raw.get("id") or content_hash
-
-        message_data: list[MessageData] = []
-        for idx, msg in enumerate(messages):
-            sequence = idx + 1
-            message_hash = fingerprint_message(
-                conversation_id,
-                msg["author_role"],
-                msg["content"],
-                msg["created_at"],
-                sequence,
-            )
-            message_id = msg["id"] or f"msg_{message_hash}"
-            message_data.append(
-                MessageData(
-                    id=message_id,
-                    conversation_id=conversation_id,
-                    author_role=msg["author_role"],
-                    content=msg["content"],
-                    created_at=msg["created_at"],
-                    content_hash=message_hash,
-                    sequence=sequence,
+            normalized = source_importer.normalize_conversation(record.payload, source_path)
+            if normalized.message_count == 0:
+                _LOG.debug(
+                    "Skipping %s conversation without messages (path=%s)",
+                    record.source_type,
+                    source_path,
                 )
-            )
+                continue
+            conversations.append(normalized)
 
-        return ConversationData(
-            id=conversation_id,
-            title=title,
-            created_at=created_at,
-            updated_at=updated_at,
-            source=source,
-            content_hash=content_hash,
-            message_count=len(message_data),
-            messages=message_data,
-        )
-
-    def _extract_content(self, message: dict[str, Any]) -> str | None:
-        content = message.get("content")
-        if content is None:
-            return None
-        if isinstance(content, str):
-            return content
-        if isinstance(content, dict):
-            parts = content.get("parts")
-            if isinstance(parts, list):
-                return "\n".join(str(part) for part in parts if part is not None)
-            if "text" in content and isinstance(content["text"], str):
-                return content["text"]
-            if "result" in content and isinstance(content["result"], str):
-                return content["result"]
-        return None
+        if not conversations:
+            raise ValueError("No supported conversations found in input")
+        return conversations
